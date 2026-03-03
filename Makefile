@@ -133,7 +133,6 @@ TXT_EMPTY := "         "
 PAD_ZERO  := "    "
 
 TMPDIR := $(TARGET_DIRECTORY)/.buildcache
-IDXFIL := $(TMPDIR)/.index
 
 OBJS_ETHANE   := $(ETHANE_SOURCES:%=$(TMPDIR)/%.o)
 OBJS_INJECTOR := $(INJECTOR_SOURCES:%=$(TMPDIR)/%.o)
@@ -183,8 +182,9 @@ COMP_LD_INJECTOR := $(COMP_LD_FLAGS) $(LINKER_OUT_INJECTOR)
 BUILD_ETHANE_PATH := $(TARGET_DIRECTORY)/$(TARGET_LIBRARY)
 BUILD_INJECTOR_PATH := $(TARGET_DIRECTORY)/$(TARGET_INJECTOR)
 
-TOTAL_OBJ := $(words $(OBJS_ETHANE) $(OBJS_INJECTOR) $(BUILD_ETHANE_PATH) \
-	$(BUILD_INJECTOR_PATH))
+OBJ_LIST := $(OBJS_ETHANE) $(OBJS_INJECTOR) $(BUILD_ETHANE_PATH) \
+	$(BUILD_INJECTOR_PATH)
+TOTAL_OBJ := $(words $(OBJ_LIST))
 # --------------------------------------------------------------------------- #
 
 # --------------------------------------------------------------------------- #
@@ -215,7 +215,6 @@ info:
 	@echo "Build Injector Path:    $(BUILD_INJECTOR_PATH)"
 	@echo "Build Directory:        $(TARGET_DIRECTORY)"
 	@echo "Build Cache Directory:  $(TMPDIR)"
-	@echo "Build Index Path:       $(IDXFIL)"
 	@echo -e "---------------------------------------------------\n"
 	@echo "--------------- [Compiler Options] ----------------"
 	@echo "C++ Compiler Executable: $(COMP_CXX_EXEC)"
@@ -236,11 +235,7 @@ clean:
 	@echo $(PAD_ZERO) $(TXT_RM) "$(TARGET_DIRECTORY)"
 	@rm -rf "$(TARGET_DIRECTORY)"
 
-__prep: $(TMPDIR)
-	@echo "0" > "$(IDXFIL)"
-
-build: __prep $(BUILD_ETHANE_PATH) $(BUILD_INJECTOR_PATH)
-	@rm -f "$(IDXFIL)"
+build: $(BUILD_ETHANE_PATH) $(BUILD_INJECTOR_PATH)
 
 $(TARGET_DIRECTORY):
 	@echo $(PAD_ZERO) $(TXT_MKDIR) "$(TARGET_DIRECTORY)"
@@ -262,44 +257,44 @@ $(TMPDIR)/%.resource: %
 
 $(TMPDIR)/%.c.o: %.c
 	@mkdir -p "$(dir $@)"
-	@echo $$(($$(cat "$(IDXFIL)" 2>/dev/null || \
-	    echo -1) + 1)) > "$(IDXFIL)"
+	$(eval CURR_IDX := $(shell i=1; for obj in $(OBJ_LIST); do if \
+	    [ "$$obj" = "$@" ]; then echo $$i; break; fi; i=$$((i+1)); done))
 	@\
-	    percent=$$(($$(cat "$(IDXFIL)") * 100 / $(TOTAL_OBJ))); \
+	    percent=$$(($(CURR_IDX) * 100 / $(TOTAL_OBJ))); \
 	    printf "$(ANSI_GRAY)%3d%%$(ANSI_RESET) " "$$percent"; \
 	    echo $(TXT_CC) "$<"; \
 	    $(COMP_CC_EXEC) $(COMP_CC_FLAGS) -c "$<" -o "$@" || exit 1
 
 $(TMPDIR)/%.cpp.o: %.cpp
 	@mkdir -p "$(dir $@)"
-	@echo $$(($$(cat "$(IDXFIL)" 2>/dev/null || \
-	    echo -1) + 1)) > "$(IDXFIL)"
+	$(eval CURR_IDX := $(shell i=1; for obj in $(OBJ_LIST); do if \
+	    [ "$$obj" = "$@" ]; then echo $$i; break; fi; i=$$((i+1)); done))
 	@\
-	    percent=$$(($$(cat "$(IDXFIL)") * 100 / $(TOTAL_OBJ))); \
+	    percent=$$(($(CURR_IDX) * 100 / $(TOTAL_OBJ))); \
 	    printf "$(ANSI_GRAY)%3d%%$(ANSI_RESET) " "$$percent"; \
 	    echo $(TXT_CXX) "$<"; \
 	    $(COMP_CXX_EXEC) $(COMP_CXX_FLAGS) -c "$<" -o "$@" || exit 1
 
 $(BUILD_ETHANE_PATH): $(RESOURCE_OBJS) $(OBJS_ETHANE) $(OBJS_INJECTOR)
-	@echo $$(($$(cat "$(IDXFIL)" 2>/dev/null || \
-	    echo -1) + 1)) > "$(IDXFIL)"
+	$(eval CURR_IDX := $(shell i=1; for obj in $(OBJ_LIST); do if \
+	    [ "$$obj" = "$@" ]; then echo $$i; break; fi; i=$$((i+1)); done))
 	@\
-	    percent=$$(($$(cat "$(IDXFIL)") * 100 / $(TOTAL_OBJ))); \
+	    percent=$$(($(CURR_IDX) * 100 / $(TOTAL_OBJ))); \
 	    printf "$(ANSI_GRAY)%3d%%$(ANSI_RESET) " "$$percent"; \
 	    echo $(TXT_LD) "$@"
 	@mkdir -p "$(dir $@)"
 	@$(CXX) $(COMP_LD_ETHANE) -o $@ || exit 1
 
 $(BUILD_INJECTOR_PATH): $(OBJS_INJECTOR) $(BUILD_ETHANE_PATH)
-	@echo $$(($$(cat "$(IDXFIL)" 2>/dev/null || \
-	    echo -1) + 1)) > "$(IDXFIL)"
+	$(eval CURR_IDX := $(shell i=1; for obj in $(OBJ_LIST); do if \
+	    [ "$$obj" = "$@" ]; then echo $$i; break; fi; i=$$((i+1)); done))
 	@\
-	    percent=$$(($$(cat "$(IDXFIL)") * 100 / $(TOTAL_OBJ))); \
+	    percent=$$(($(CURR_IDX) * 100 / $(TOTAL_OBJ))); \
 	    printf "$(ANSI_GRAY)%3d%%$(ANSI_RESET) " "$$percent"; \
 	    echo $(TXT_LD) "$@"
 	@mkdir -p "$(dir $@)"
 	@$(CXX) $(COMP_LD_INJECTOR) -o $@ || exit 1
 
-ALL_DEPS := $(OBJS:.o=.d)
+ALL_DEPS := $(OBJS_ETHANE:.o=.d) $(OBJS_INJECTOR:.o=.d)
 -include $(wildcard $(ALL_DEPS))
 # --------------------------------------------------------------------------- #
