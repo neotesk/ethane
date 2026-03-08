@@ -23,9 +23,12 @@
 
 #pragma once
 
+#include <ethane.hpp>
 #include <string>
 #include <algorithm>
 #include <dlfcn.h>
+#include <sys/mman.h>
+#include <unistd.h>
 
 typedef struct {
     char* data;
@@ -33,9 +36,9 @@ typedef struct {
     bool valid;
 } Resource;
 
-static Resource getResource ( const char* path ) {
+static Resource getResource ( CString path ) {
     // Create a base resource structure
-    Resource res = { nullptr, 0, false };
+    Resource res = { Nothing, 0, False };
 
     // If the path is empty or null, skip the
     // processing and return the structure
@@ -76,4 +79,32 @@ static Resource getResource ( const char* path ) {
     }
 
     return res;
+}
+
+static Pointer loadLibraryFromResource ( CString path ) {
+    // Get the resource first
+    Resource res = getResource( path );
+    if ( !res.valid )
+        return Nothing;
+
+    // Create a temporary memory file
+    Integer fd = memfd_create( "bass_lib", MFD_CLOEXEC );
+
+    if ( fd == -1 )
+        return Nothing;
+
+    // Write the data into the memory file
+    write( fd, res.data, res.size );
+
+    // Create a path for the memory file
+    char fd_path[ 64 ];
+    snprintf( fd_path, sizeof( fd_path ), "/proc/self/fd/%d", fd );
+
+    // Load the library through that path
+    Pointer ptr = dlopen( fd_path, RTLD_NOW );
+
+    // When we do dlclose, the file will be freed.
+    close( fd );
+
+    return ptr;
 }

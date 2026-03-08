@@ -24,12 +24,20 @@
 ******************************************************************************/
 
 #include <ethane.hpp>
+#include <resource.hpp>
+#include <bass/bass.hpp>
 
 Constructor ethaneStart () {
     debug( "Greetings from %s %s!", PROJECT_NAME, PROJECT_VERSION );
     debug( "Visit %s for more info.", PROJECT_SOURCE );
+
+    // Initialize the sound/music library that we are using
+    Boolean i = BASS::Init( "res/libbass.so", -1, 44100 );
 }
 
 Destructor ethaneStop () {
     debug( "Goodbye, I go now :3" );
+
+    // Deinitialize everything
+    BASS::Free();
 }

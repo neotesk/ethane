@@ -74,7 +74,7 @@ Boolean inject ( pinject_data data, Boolean uninject = False ) {
         "%s/%s", binPath, TARGET_LIBRARY );
 
     // Call dlopen
-    Pointer result = pinject_dlopen( &data, absLibPath, uninject ? 5 : 1 );
+    Pointer result = pinject_dlopen( &data, absLibPath, RTLD_LAZY );
 
     // Check if there's any error
     if ( !result ) {

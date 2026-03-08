@@ -50,6 +50,7 @@
 #               cheat itself and the other one is the injector.               #
 # --------------------------------------------------------------------------- #
 	ETHANE_SOURCES := \
+		src/bass/bass.cpp \
 		src/core/main.cpp
 
 	INJECTOR_SOURCES := \
@@ -69,7 +70,9 @@
 #           These resources only work for the cheat library itself.           #
 #                  No resources are needed for the injector.                  #
 # --------------------------------------------------------------------------- #
-	RESOURCES :=
+	RESOURCES := \
+		res/libbass.so \
+		res/lupo.xm
 # --------------------------------------------------------------------------- #
 
 ###############################################################################

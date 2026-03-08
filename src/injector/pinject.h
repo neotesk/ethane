@@ -22,6 +22,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 #include <sys/ptrace.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -37,17 +38,17 @@
 // Custom assertion
 #define assertp( condition, message, ... ) \
     if ( condition ) { \
-        printf( "Fatal Error! " message, ##__VA_ARGS__ ); \
+        printf( "Fatal Error! " message "\n", ##__VA_ARGS__ ); \
         return 0; \
     }
 #define asserti( condition, message, ... ) \
     if ( condition ) { \
-        printf( "Fatal Error! " message, ##__VA_ARGS__ ); \
+        printf( "Fatal Error! " message "\n", ##__VA_ARGS__ ); \
         return output; \
     }
 #define assertv( condition, message, ... ) \
     if ( condition ) { \
-        printf( "Fatal Error! " message, ##__VA_ARGS__ ); \
+        printf( "Fatal Error! " message "\n", ##__VA_ARGS__ ); \
         return; \
     }
 
@@ -170,6 +171,16 @@ static bool_t __set_regs ( int32_t pid, user_regs_t *regs ) {
         regs->eip, regs->esi, regs->esp, regs->eax );
     return 1;
 }
+static void __continue_until_trap ( pinject_data *data ) {
+    if ( ptrace( PTRACE_CONT, data->pid, 0, 0 ) == -1 ) {
+        debugger( "ptrace_cont failed: %s", strerror( errno ) );
+        return;
+    }
+    if ( waitpid( data->pid, NULL, 0 ) == -1 ) {
+        debugger( "waitpid failed: %s", strerror( errno ) );
+        return;
+    }
+}
 
 // Here comes the good stuff
 static pinject_data pinject_begin ( int32_t pid ) {
@@ -244,6 +255,18 @@ static pinject_data pinject_begin ( int32_t pid ) {
     // Copy the registry to the temp section
     memcpy( &output.tempregs, &output.regs, sizeof( output.tempregs ) );
 
+    // Clean out the tempregs so we have a base scratchpad
+    output.tempregs.eax = 0;
+    output.tempregs.ebx = 0;
+    output.tempregs.ecx = 0;
+    output.tempregs.edx = 0;
+    output.tempregs.edi = 0;
+    output.tempregs.esi = 0;
+    output.tempregs.ebp = 0;
+
+    // Sanitize EFLAGS
+    output.tempregs.eflags = 0x202;
+
     output.valid = 1;
 
     return output;
@@ -251,17 +274,17 @@ static pinject_data pinject_begin ( int32_t pid ) {
 
 static void *pinject_dlopen ( pinject_data *data, const char *file, int mode ) {
     // Firstly, we need to align base ESP to a 16-byte boundary for stability
-    ulong baseEsp = data->tempregs.esp & ~0xF;
+    ulong baseEsp = ( data->regs.esp - CDECL_SAFEZONE ) & ~0xF;
 
     // Create a trap (int 3) for the function to return to.
-    ulong trapAddr = baseEsp - CDECL_SAFEZONE;
+    ulong trapAddr = baseEsp - 4;
     ptrace( PTRACE_POKETEXT, data->pid, trapAddr, 0xCC );
     debugger( "Created a trap instruction at address %p!", trapAddr );
 
     // Get the remote address for path. We're gonna write that into
     // it's stack. Since I'm paranoid i'm gonna give 16 bytes of padding.
     const ulong szFilePath = strlen( file ) + 1;
-    long remotePathAddr = ( trapAddr - szFilePath - 16 ) & ~0x3;
+    long remotePathAddr = ( trapAddr - szFilePath - 16 ) & ~0xF;
 
     // Write it to the target process' stack
     __poke_text( data->pid, remotePathAddr, file );
@@ -271,8 +294,11 @@ static void *pinject_dlopen ( pinject_data *data, const char *file, int mode ) {
     // [esp + 4] = path pointer (remotePathAddr)
     // [esp + 0] = return address (trapAddr)
     data->tempregs.esp = ( remotePathAddr - 32 ) & ~0xF;
-    ptrace( PTRACE_POKETEXT, data->pid, data->tempregs.esp + 0, trapAddr );
-    ptrace( PTRACE_POKETEXT, data->pid, data->tempregs.esp + 4, remotePathAddr );
+    data->tempregs.esp -= 4;
+
+    ptrace( PTRACE_POKETEXT, data->pid, data->tempregs.esp, trapAddr );
+    ptrace( PTRACE_POKETEXT, data->pid, data->tempregs.esp + 4,
+        remotePathAddr );
     ptrace( PTRACE_POKETEXT, data->pid, data->tempregs.esp + 8, ( ulong )mode );
 
     // Set the function registry
@@ -284,11 +310,7 @@ static void *pinject_dlopen ( pinject_data *data, const char *file, int mode ) {
         return 0;
 
     // Let it execute our tiny stack
-    bool_t procContinue = ptrace( PTRACE_CONT, data->pid, 0, 0 ) != -1;
-    assertp( !procContinue, "Cannot continue target process." );
-
-    // Wait for the process to stop
-    waitpid( data->pid, NULL, 0 );
+    __continue_until_trap( data );
 
     // Fetch the result
     bool_t regFetched = ptrace( PTRACE_GETREGS, data->pid,
@@ -306,16 +328,24 @@ static void *pinject_dlopen ( pinject_data *data, const char *file, int mode ) {
 }
 
 static int pinject_dlclose ( pinject_data *data, void *handle ) {
-    ulong trapAddr = data->tempregs.esp - ( BUFFER_MAX + CDECL_SAFEZONE + 16 );
+    // Firstly, we need to align base ESP to a 16-byte boundary for stability
+    ulong baseEsp = ( data->regs.esp - CDECL_SAFEZONE ) & ~0xF;
+
+    // Create a trap (int 3) for the function to return to.
+    ulong trapAddr = baseEsp - 4;
     ptrace( PTRACE_POKETEXT, data->pid, trapAddr, 0xCC );
     debugger( "Created a trap instruction at address %p!", trapAddr );
+
+    // Realign the ESP to our new frame
+    data->tempregs.esp = ( baseEsp - 16 ) & ~0xF;
+    data->tempregs.esp -= 4;
 
     // Manually build the stack frame for dlclose( handle )
     // [esp + 4] = handle (*handle)
     // [esp + 0] = return address (trapAddr)
-    data->tempregs.esp -= 16;
-    ptrace( PTRACE_POKETEXT, data->pid, data->tempregs.esp + 0, trapAddr );
-    ptrace( PTRACE_POKETEXT, data->pid, data->tempregs.esp + 4, ( ulong )handle );
+    ptrace( PTRACE_POKETEXT, data->pid, data->tempregs.esp, trapAddr );
+    ptrace( PTRACE_POKETEXT, data->pid, data->tempregs.esp + 4,
+        ( ulong )handle );
 
     // Set the function registry
     data->tempregs.eip = data->dlclose;
@@ -326,11 +356,7 @@ static int pinject_dlclose ( pinject_data *data, void *handle ) {
         return 0;
 
     // Let it execute our tiny stack
-    bool_t procContinue = ptrace( PTRACE_CONT, data->pid, 0, 0 ) != -1;
-    assertp( !procContinue, "Cannot continue target process." );
-
-    // Wait for the process to stop
-    waitpid( data->pid, NULL, 0 );
+    __continue_until_trap( data );
 
     // Fetch the result
     bool_t regFetched = ptrace( PTRACE_GETREGS, data->pid,
@@ -344,11 +370,16 @@ static int pinject_dlclose ( pinject_data *data, void *handle ) {
 
 static void pinject_dlerror ( pinject_data *data, char *output,
     ulong outputSz ) {
-    // Setup dlerror call (dlerror takes no arguments)
-    ulong trapAddr = data->tempregs.esp - ( BUFFER_MAX + CDECL_SAFEZONE + 16 );
-    ptrace( PTRACE_POKETEXT, data->pid, trapAddr, 0xCC );
+    // Firstly, we need to align base ESP to a 16-byte boundary for stability
+    ulong baseEsp = ( data->regs.esp - CDECL_SAFEZONE ) & ~0xF;
 
-    data->tempregs.esp = data->tempregs.esp - 16;
+    // Create a trap (int 3) for the function to return to.
+    ulong trapAddr = baseEsp - 4;
+    ptrace( PTRACE_POKETEXT, data->pid, trapAddr, 0xCC );
+    debugger( "Created a trap instruction at address %p!", trapAddr );
+
+    // Setup dlerror call (dlerror takes no arguments)
+    data->tempregs.esp = data->regs.esp - 16;
     ptrace( PTRACE_POKETEXT, data->pid, data->tempregs.esp, trapAddr );
     data->tempregs.eip = data->dlerror;
 
